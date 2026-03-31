@@ -1,0 +1,477 @@
+substitutions:
+  device_name: yeelight-candela-lamp
+  friendly_name: Yeelight Candela Lamp
+  # Candle Mode Config
+  candle_lo: "0.20f"
+  candle_hi: "0.80f"
+  candle_delta_min: "0.25f"
+  candle_delta_max: "0.45f"
+  # Candle Low Config
+  candle_low_lo: "0.05f"
+  candle_low_hi: "0.40f"
+  candle_low_delta_min: "0.10f"
+  candle_low_delta_max: "0.30f"
+  # Timing
+  candle_delay_step_base: "60"   # step 60..111 ms
+  candle_delay_step_rand: "51"
+  candle_delay_dwell_base: "120" # dwell 120..300 ms
+  candle_delay_dwell_rand: "181"
+  # Rotary Config
+  rotary_step: "0.2f"
+
+globals:
+  - id: led_pwm_level
+    type: float
+    initial_value: '0.0'
+    restore_value: no
+  - id: enc_skip_once
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ab_start
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: ab_target
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: ab_steps
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: ab_delay_ms
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: ab_i
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: enc_last_dir
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: enc_last_ts
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: candle_last_ts
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: flame_low
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  - id: flame_start
+    type: float
+    restore_value: no
+    initial_value: '0.6'
+  - id: flame_target
+    type: float
+    restore_value: no
+    initial_value: '0.6'
+  - id: flame_steps
+    type: int
+    restore_value: no
+    initial_value: '10'
+  - id: flame_i
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: light_internal_update
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: candle_exit_keep_light_off
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: ESP32 Code to mimic the original ${friendly_name}
+  on_boot:
+    priority: 600
+    then:
+      - light.turn_on:
+          id: light1
+          brightness: 0
+          transition_length: 0ms
+      - light.turn_off: light1
+
+logger:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: IP_ADDRESS
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: HOTSPOT_PASSWORD
+
+captive_portal:
+
+ota:
+  - platform: esphome
+    password: OTA_PASSWORD
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: API_ENCRYPTION_KEY
+
+# Enable Web server
+#web_server:
+#  port: 80
+
+# Sync time with Home Assistant
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+text_sensor:
+#  - platform: template
+#    name: "Uptime"
+#    icon: mdi:timer-outline
+#    lambda: |-
+#      uint32_t dur = (uint32_t) id(raw_uptime).state;
+#      int hours   = dur / 3600;
+#      int minutes = (dur % 3600) / 60;
+#      char buffer[20];
+#      sprintf(buffer, "%02d h %02d min", hours, minutes);
+#      return std::string(buffer);
+#    update_interval: 60s
+
+sensor:
+#  # Uptime sensor
+#  - platform: uptime
+#    id: raw_uptime
+#    internal: true
+#  # PWM sensor (%)
+#  - platform: template
+#    name: "${friendly_name} LED PWM %"
+#    icon: mdi:chart-timeline-variant-shimmer
+#    unit_of_measurement: "%"
+#    accuracy_decimals: 0
+#    update_interval: 10s
+#    lambda: |-
+#      return id(led_pwm_level) * 100.0;
+  # Rotary
+  - platform: rotary_encoder
+    id: my_rotary_encoder
+    name: "Rotary Encoder"
+    internal: true   # Do not expose to Home Assistant
+    pin_a: GPIO6
+    pin_b: GPIO5
+    on_value:
+      then:
+        - lambda: |-
+            // Skip the event triggered by our own reset
+            if (id(enc_skip_once)) {
+              id(enc_skip_once) = false;
+              return;
+            }
+
+            bool gesture = false;
+            uint32_t now = millis();
+            const uint32_t ENC_GESTURE_WIND_MS = 500; // max time between CW and CCW to count as a gesture. Tweak: 300–600 ms works well    
+
+            //If Clockwise Turn
+            if(x > 0) {
+              // ESP_LOGI("rotary", "Turning CW");
+              id(enc_last_dir) = 1;
+              id(enc_last_ts) = millis();
+            }
+            else if(x < 0) // If Anticlocwise Turn
+            {
+              // ESP_LOGI("rotary", "Turning CCW");
+
+              gesture =
+                (id(enc_last_dir) == 1) &&
+                ((now - id(enc_last_ts)) <= ENC_GESTURE_WIND_MS);
+
+              id(enc_last_dir) = -1;
+            }
+
+            if (x != 0) {
+              if (gesture) {
+                // ESP_LOGI("encoder", "(CW->CCW): Candle mode ENABLED");
+                id(candle_last_ts) = millis();
+
+                if (!id(candle_mode_sw).state)
+                  id(candle_mode_sw).turn_on();
+              }
+              else if((now - id(candle_last_ts)) > ENC_GESTURE_WIND_MS) { // Ignore extra rotary turns in the next ENC_GESTURE_WIND_MS
+                // Disable candle mode if enabled
+                if (id(candle_mode_sw).state)
+                  id(candle_mode_sw).turn_off();
+                else
+                  id(apply_brightness).execute(); // Run script to apply brightness change
+              }
+
+              // Mark to skip the event triggered by our own reset
+              id(enc_skip_once) = true;
+            }
+
+        # Reset to make each movement relative
+        - sensor.rotary_encoder.set_value:
+            id: my_rotary_encoder
+            value: 0
+
+switch:
+  - platform: template
+    id: candle_mode_sw
+    name: "Candle Mode"
+    internal: true
+    optimistic: true
+    icon: mdi:candle
+    turn_on_action:
+      # Ensure HA light entity is ON when enabling Candle Mode
+      - lambda: |-
+          if(id(light1).current_values.is_on())
+            return;
+
+          id(light_internal_update) = true;
+          auto call = id(light1).turn_on();
+          call.set_transition_length(0);
+          call.perform();
+          id(light_internal_update) = false;
+
+      - script.execute: candle_loop
+
+    turn_off_action:
+      - script.stop: candle_loop
+      # Sync HA light entity to the last PWM level when exiting Candle Mode
+      - lambda: |-
+          if(id(candle_exit_keep_light_off)) { // Turn Light Off requested
+            // Keep light OFF and clear the flag; also zero PWM to avoid glow
+            id(candle_exit_keep_light_off) = false;
+            id(led_pwm_level) = 0.0f;
+            id(output_led).set_level(id(led_pwm_level));
+          }
+          else // If candle mode disabled from switch, sync light brightness with current pwm_level
+          {
+            float pwm = max(0.0f, min(1.0f, id(led_pwm_level)));
+
+            id(light_internal_update) = true;
+            auto call = id(light1).turn_on();
+            call.set_brightness(pwm);
+            call.set_transition_length(0);
+            call.perform();
+            id(light_internal_update) = false;
+          }
+
+          // Reset flame low value
+          id(flame_low) = false;
+
+output:
+  - platform: ledc
+    id: output_led
+    pin: GPIO3
+    frequency: 1220 Hz    # Sets Frequency
+    max_power: 100%       # Upper brightness limit
+    min_power: 5%         # Lower brightness limit, since led turns off at 5%
+
+light:
+  - platform: monochromatic
+    id: light1
+    output: output_led
+    name: Light
+    default_transition_length: 0s
+    gamma_correct: 0
+    restore_mode: ALWAYS_OFF
+    on_state:
+      then:
+        - if:
+            condition:
+              lambda: |-
+                // If Candle Mode is ON and this change is not internal, sync light to PWM and exit
+                return (id(candle_mode_sw).state && !id(light_internal_update));
+            then:
+              - lambda: |-
+                  // If OFF was requested, mark flag to avoid sync while exiting from candle mode and do not resync brightness
+                  if (!id(light1).current_values.is_on())
+                    id(candle_exit_keep_light_off) = true;
+
+              - switch.turn_off: candle_mode_sw
+      
+        - lambda: |-
+            // Mirror current brightness into global var
+            id(led_pwm_level) = (id(light1).current_values.is_on()) ? id(light1).current_values.get_brightness() : 0.0f;
+    effects: 
+      - lambda:
+          name: "Candle"
+          update_interval: never
+          lambda: |-
+            id(candle_mode_sw).turn_on();
+      - lambda:
+            name: "Candle Low"
+            update_interval: never
+            lambda: |-
+              id(flame_low) = true;
+              id(candle_mode_sw).turn_on();
+
+script:
+  - id: apply_brightness
+    then:
+      - lambda: |-
+          // Compute start and clamped target
+          float cur    = id(light1).current_values.is_on() ? id(light1).current_values.get_brightness() : 0; // Setting current brightness to 0 of light is Off
+          float delta  = id(enc_last_dir) * ${rotary_step}; // Increate rotary_step % per detent
+          float target = max(0.0f, min(1.0f, cur + delta));
+          // ESP_LOGI("rotary", "Current: %.2f, operator: %.2f, target: %.2f", cur, delta, target);
+
+          // If light is OFF and delta is negative, ignore
+          if (!id(light1).current_values.is_on() && delta <= 0.0f)
+            id(apply_brightness).stop();
+
+          // Distance and early exit
+          float dist = fabsf(target - cur);
+          if (dist < 0.001f)
+            id(apply_brightness).stop();
+
+          // Steps proportional to distance
+          const int STEPS_MIN = 8;
+          const int STEPS_MAX = 25;
+          int steps = (int) roundf(STEPS_MIN + dist * (STEPS_MAX - STEPS_MIN));
+          steps = max(STEPS_MIN, min(STEPS_MAX, steps));
+
+          // Fixed per-step delay → total duration ≈ steps * per_step_ms
+          int per_step_ms = (int) roundf(20.0f + dist * 90.0f);  // ~20..110 ms
+
+          // Persist values for the repeat block
+          id(ab_start)    = cur;
+          id(ab_target)   = target;
+          id(ab_steps)    = steps;
+          id(ab_delay_ms) = per_step_ms;
+          id(ab_i)        = 0; // Global var needed since static vars inside loop keep the value between script execution. Can't reset value if script is externally stopped while in the loop.
+
+      - repeat:
+          count: !lambda 'return id(ab_steps);'
+          then:
+            - lambda: |-
+                // Cosine ease-in-out interpolation (smooth, no abrupt changes)
+                float t = (float) id(ab_i)  / (float) id(ab_steps);
+                float s = 0.5f - 0.5f * cosf((float) M_PI * t);
+                float b = id(ab_start) + (id(ab_target) - id(ab_start)) * s;
+
+                // Update only the output (no HA state spam)
+                id(led_pwm_level) = b;
+                id(output_led).set_level(b);
+
+                id(ab_i) = id(ab_i) + 1;
+            - delay: !lambda 'return id(ab_delay_ms);'
+
+      - lambda: |-
+          // Land exactly on target at the end
+          auto final_call = id(light1).turn_on();
+          final_call.set_brightness(id(ab_target));
+          final_call.set_transition_length(0);
+          final_call.perform();
+
+  - id: candle_loop
+    mode: restart
+    then:
+      # Ensure the script is not writing output anymore
+      - script.stop: apply_brightness
+
+      # Ensure switch is ON before looping
+      - wait_until:
+          condition:
+            switch.is_on: candle_mode_sw
+
+      - logger.log: 'Starting candle_loop script'
+
+      # Start from current light brightness (seed OUTPUT to the same value)
+      - lambda: |-
+          float cur = max(0.0f, min(1.0f, id(light1).current_values.get_brightness()));
+
+          id(flame_start)  = cur;
+          id(flame_target) = cur;
+          id(flame_steps)  = 1;
+          id(output_led).set_level(cur);
+          id(led_pwm_level) = cur;  // keep your % sensor in sync if you want
+
+      - while:
+          condition:
+            lambda: 'return true;'   # run until script.stop is called
+          then:
+            # 1) Choose a new target far enough from current to notice
+            - lambda: |-
+                float cur = id(flame_target);   // last reached target as current base
+
+                // Allowed band and min/max jump size
+                const float LO = id(flame_low) ? ${candle_low_lo} : ${candle_lo};                       // candle lower bound
+                const float HI = id(flame_low) ? ${candle_low_hi} : ${candle_hi};                       // candle upper bound
+                const float DELTA_MIN = id(flame_low) ? ${candle_low_delta_min} : ${candle_delta_min};  // min change
+                const float DELTA_MAX = id(flame_low) ? ${candle_low_delta_max} : ${candle_delta_max};  // max change
+
+                // Pick a signed delta in [DELTA_MIN .. DELTA_MAX]
+                float span  = DELTA_MIN + (esp_random() % 1000) / 1000.0f * (DELTA_MAX - DELTA_MIN);
+                if ((esp_random() & 1) == 0) span = -span;
+
+                float target = max(LO, min(HI, cur + span));
+
+                // Fewer steps -> bigger per-step changes (more visible)
+                float dist = fabsf(target - cur);
+                int steps = max(8, min(25, (int) roundf(8 + dist * 20)));   // 8..25 steps                             
+                  
+                id(flame_start)  = cur;
+                id(flame_target) = target;
+                id(flame_steps)  = steps;
+                id(flame_i)      = 0;
+
+                //ESP_LOGD("candle", "cur=%.2f target=%.2f steps=%d", cur, target, steps);
+            # 2) Interpolate start -> target (cosine easing), noticeable step time
+            - repeat:
+                count: !lambda 'return id(flame_steps);'
+                then:
+                  - lambda: |-
+                      float t = (float) id(flame_i) / (float) id(flame_steps);
+                      float s = 0.5f - 0.5f * cosf((float) M_PI * t);  // smooth ease
+                      float b = id(flame_start) + (id(flame_target) - id(flame_start)) * s;
+
+                      id(led_pwm_level) = b;  // update your % mirror if you want
+                      id(output_led).set_level(b);
+
+                      id(flame_i) = id(flame_i) + 1;
+                  # Step time to get a perceivable ramp
+                  - delay: !lambda 'return ${candle_delay_step_base} + (esp_random() % ${candle_delay_step_rand});'
+
+            # 3) Optional quick flicker: short dip or spike then return fast
+            - if:
+                condition:
+                  lambda: 'return (esp_random() % 6) == 0;'   # ~1/6 chance
+                then:
+                  - lambda: |-
+                      float cur = id(flame_target);
+                      float jitter = 0.06f + (esp_random() % 7) / 100.0f;  // 6..12%
+                      if ((esp_random() & 1) == 0) jitter = -jitter;
+                      float blip = max(0.15f, min(0.95f, cur + jitter));
+
+                      id(led_pwm_level) = blip;
+                      id(output_led).set_level(blip);
+                  - delay: 60ms
+                  - lambda: |-
+                      // Snap back closer to previous current
+                      float cur = id(flame_target);
+                      float back = (0.4f * id(led_pwm_level)) + (0.6f * cur);
+                      id(output_led).set_level(back);
+
+            # 4) Short dwell before next target to feel organic
+            - delay: !lambda 'return ${candle_delay_dwell_base} + (esp_random() % ${candle_delay_dwell_rand});'
+
+      - logger.log: 'Stopping candle_loop script'
