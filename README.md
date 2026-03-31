@@ -84,6 +84,8 @@ Apply hot air and gently lift the board until it detaches. Avoid overheating.
 
 Flashing can be done through the **ESPHome interface** using the provided YAML file.
 
+> **Note:** Replace IP_ADDRESS, HOTSPOT_PASSWORD, OTA_PASSWORD, and ENCRYPTION_KEY with your own values.
+
 ---
 
 ### 5. Re-assembly
